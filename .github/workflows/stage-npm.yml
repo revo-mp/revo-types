@@ -1,0 +1,58 @@
+name: Stage npm packages
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  stage_npm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [shared, client, server, natives, webview]
+    concurrency:
+      group: npm-${{ github.ref }}-${{ matrix.package }}
+      cancel-in-progress: false
+    env:
+      PACKAGE: ${{ matrix.package }}
+    steps:
+      - name: Check out the release
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Install npm with staging support
+        run: npm install --global npm@11.15.0 --ignore-scripts --no-audit --no-fund
+
+      - name: Stage the package
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          test -n "$NODE_AUTH_TOKEN" || { echo 'Set the NPM_TOKEN Actions secret.'; exit 1; }
+          DIST_TAG=$(node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFileSync } from 'node:fs';
+          const name = process.env.PACKAGE;
+          assert.ok(['shared', 'client', 'server', 'natives', 'webview'].includes(name));
+          const root = JSON.parse(readFileSync('package.json', 'utf8'));
+          const pkg = JSON.parse(readFileSync(`packages/${name}/package.json`, 'utf8'));
+          assert.equal(process.env.GITHUB_REF_NAME, `v${root.version}`, 'The tag must match the release version.');
+          assert.equal(pkg.version, root.version, 'The package must match the release version.');
+          assert.notEqual(pkg.private, true, 'The package is private.');
+          console.log(pkg.version.includes('-') ? 'next' : 'latest');
+          NODE
+          )
+          cd "packages/$PACKAGE"
+          npm stage publish . --workspaces=false --access public --ignore-scripts --registry=https://registry.npmjs.org --tag "$DIST_TAG"

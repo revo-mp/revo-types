@@ -1,0 +1,8 @@
+{
+  "name": "revo-types",
+  "version": "0.0.10",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "name": "@revomp/types-natives",
+  "version": "0.0.10",
+  "description": "TypeScript declarations for the Revo natives API.",
+  "types": "index.d.ts",
+  "files": [
+    "index.d.ts"
+  ],
+  "dependencies": {
+    "@revomp/types-client": "0.0.10"
+  }
+}

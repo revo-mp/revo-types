@@ -1,0 +1,9 @@
+{
+  "name": "@revomp/types-webview",
+  "version": "0.0.10",
+  "description": "TypeScript declarations for the Revo webview API.",
+  "types": "index.d.ts",
+  "files": [
+    "index.d.ts"
+  ]
+}
