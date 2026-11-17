@@ -8,6 +8,71 @@ declare module "revo-server" {
         Fire = 2,
     }
 
+    export enum ProjectileKind {
+        Rocket = 0,
+        Grenade = 1,
+        GrenadeLauncher = 2,
+        PipeBomb = 3,
+        Molotov = 4,
+        /** Reserved for the built-in Rhino cannon. */
+        TankShell = 5,
+    }
+
+    /** Server validation and damage settings for a bullet weapon. */
+    export interface IWeaponProfile {
+        /** Maximum range in metres, greater than 0 and at most 20000. */
+        range: number;
+        /** Damage per pellet before beforeDamage handlers, 0..1000000. */
+        damage: number;
+        /** Minimum time between shots in milliseconds, 10..60000. */
+        shotIntervalMs: number;
+        /** 1..16. Defaults to 1 for a new profile. */
+        maxPellets?: number;
+        /** Maximum deviation from the first pellet in degrees, 0..30. Defaults to 0. */
+        spreadDegrees?: number;
+        /** Ammunition variant. Defaults to 0. Custom weapons use 0. */
+        ammoType?: number;
+        /** Apply armour before health. Defaults to true for a new profile. */
+        armorFirst?: boolean;
+    }
+
+    /** Match these settings to the weapon's native asset metadata. */
+    export interface IProjectileProfile {
+        kind: ProjectileKind;
+        /** Peak blast damage, greater than 0 and at most 1000000. Molotov requires 0. */
+        damage: number;
+        /** Blast radius in metres, greater than 0 and at most 30. */
+        radius: number;
+        /** Maximum travel distance in metres, greater than 0 and at most 1000. */
+        range: number;
+        /** Metres per second, greater than 0 and at most 200. The Rhino cannon allows 2000. */
+        maximumSpeed: number;
+        /** Minimum time between launches in milliseconds, 500..60000. */
+        launchIntervalMs: number;
+        /** Maximum flight time in milliseconds, 1..30000. */
+        lifetimeMs: number;
+    }
+
+    /** Registers or replaces a bullet profile. Changes affect subsequent shots.
+     * Omitted optional settings and existing special-ammunition effects are retained on replacement.
+     * Returns false for invalid settings or a weapon registered as a projectile. Wrong argument types throw TypeError.
+     */
+    export function registerWeaponProfile(weapon: number, profile: IWeaponProfile): boolean;
+    /** Returns a copy of the profile, or null. ammoType defaults to 0. */
+    export function getWeaponProfile(weapon: number, ammoType?: number): Required<IWeaponProfile> | null;
+    /** Removes one ammunition variant. Previously accepted shots retain their damage profile. */
+    export function unregisterWeaponProfile(weapon: number, ammoType?: number): boolean;
+    /** Registers or replaces a projectile profile and sends its flight behavior to clients.
+     * Up to 256 projectile profiles, including built-in profiles. Changes affect subsequent launches.
+     * Returns false for invalid settings or a weapon registered as a bullet weapon. Wrong argument types throw TypeError.
+     * Built-in projectile kinds cannot be changed. Custom sticky bombs and proximity mines are unsupported.
+     */
+    export function registerProjectileProfile(weapon: number, profile: IProjectileProfile): boolean;
+    /** Returns a copy of the profile, or null. */
+    export function getProjectileProfile(weapon: number): IProjectileProfile | null;
+    /** Removes the profile. Projectiles already authorized remain valid until impact or expiry. */
+    export function unregisterProjectileProfile(weapon: number): boolean;
+
     export enum PlayerState {
         Disconnected = 0,
         Connected = 1,
@@ -33,7 +98,7 @@ declare module "revo-server" {
 
     /** Referenced entities may be destroyed after the callback. */
     export interface IDamageEvent {
-        /** Collision component. null for explosions and fire. */
+        /** Collision component. Compare with PedBodyPart for standard human peds. null for explosions and fire. */
         readonly component: number | null;
         /** Damage requested by the hit. The final health loss may differ. */
         readonly damage: number;
@@ -74,6 +139,17 @@ declare module "revo-server" {
         readonly id: number;
         readonly type: shared.BaseType;
         readonly valid: boolean;
+
+        /** Returns a copy of the value, or undefined if the key isn't set. */
+        getMeta<K extends keyof shared.ICustomBaseMeta>(key: K): shared.ICustomBaseMeta[K] | undefined;
+        getMeta<T = shared.TransportValue>(key: string): T | undefined;
+        hasMeta(key: string): boolean;
+        getMetaKeys(): string[];
+        /** Stores a copy of the value. Only server scripts can read it. */
+        setMeta<K extends string>(key: K, value: K extends keyof shared.ICustomBaseMeta ? shared.ICustomBaseMeta[K] : shared.TransportValue): void;
+        /** Sets several keys at once. If any value is invalid, nothing is changed. */
+        setMeta(values: Partial<shared.ICustomBaseMeta> & Record<string, shared.TransportValue>): void;
+        deleteMeta(key: string): void;
 
         getSyncedMeta<K extends keyof shared.ICustomBaseSyncedMeta>(key: K): shared.ICustomBaseSyncedMeta[K] | undefined;
         getSyncedMeta<T = shared.TransportValue>(key: string): T | undefined;
@@ -142,9 +218,7 @@ declare module "revo-server" {
         static readonly count: number;
 
         static getById(id: number): VoiceChannel | null;
-        static getByNetworkId(networkId: number): VoiceChannel | null;
 
-        readonly networkId: number | null;
         readonly players: readonly Player[];
         readonly playerCount: number;
 
@@ -175,32 +249,20 @@ declare module "revo-server" {
         destroy(): void;
     }
 
-    export enum AudioSourceType {
-        Resource = 0,
-        Url = 1,
-        LiveUrl = 2,
-    }
-
     export enum AudioPlaybackState {
         Stopped = 0,
         Playing = 1,
         Paused = 2,
     }
 
-    export interface IAudioSource {
-        readonly type: AudioSourceType;
-        /** Resource: relative to this server's client content root. URLs: HTTP(S) only.
-         * Absolute filesystem paths and parent-directory traversal are rejected.
-         */
-        readonly path: string;
-    }
-
     export interface IAudioOptions {
+        /** Treat an HTTP(S) source as a live broadcast. Defaults to false. Resource audio cannot be live. */
+        readonly live?: boolean;
         /** Sets the position for spatial audio. Omit for frontend (2D) playback. */
         readonly pos?: shared.IVector3;
-        /** Volume in dB, from -100 to 12. Defaults to 0. GTA categories and settings also affect playback. */
+        /** Gain in dB, -100..100. -100 mutes. Defaults to 0. GTA categories and settings also affect playback. */
         readonly volume?: number;
-        /** Positive streaming radius in metres. Defaults to 200. */
+        /** Positive streaming radius in metres. Defaults to the server's stream_distance setting. */
         readonly streamDistance?: number;
         /** Defaults to false. Live URLs cannot loop. */
         readonly loop?: boolean;
@@ -216,16 +278,19 @@ declare module "revo-server" {
      * Loading, buffering, errors and completion are local to each listener and emit no server events.
      */
     export class Audio extends WorldBase {
-        constructor(source: IAudioSource, options?: IAudioOptions);
+        /** resources://audio/file.mp3 addresses the client content root. HTTP(S) URLs load remotely.
+         * Resource paths support percent encoding. Absolute paths and parent-directory traversal are rejected.
+         */
+        constructor(source: string, options?: IAudioOptions);
 
         static readonly all: readonly Audio[];
         static readonly count: number;
 
         static getById(id: number): Audio | null;
-        static getByNetworkId(networkId: number): Audio | null;
 
-        readonly networkId: number | null;
-        readonly source: Readonly<IAudioSource>;
+        /** Source URI. Resource paths are returned with percent encoding. */
+        readonly source: string;
+        readonly live: boolean;
         readonly spatial: boolean;
         readonly category: string;
         /** Server playback state. Unchanged when a recording finishes on a client. */
@@ -235,6 +300,7 @@ declare module "revo-server" {
         readonly attachedTo: Entity | null;
         readonly everyone: boolean;
 
+        /** Gain in dB, -100..100. -100 mutes. */
         volume: number;
         loop: boolean;
         streamDistance: number;
@@ -271,6 +337,19 @@ declare module "revo-server" {
         destroy(): void;
     }
 
+    export interface IEntityAttachmentOptions {
+        /** Parent bone name ("SKEL_R_Hand") or integer bone ID (57005, range 0..65535). Resolved for the loaded model. Missing bones use the entity origin. */
+        bone?: string | number;
+        /** Child bone name or integer bone ID (0..65535). Defaults to the child's origin. Missing bones use the origin. */
+        ownBone?: string | number;
+        /** Position of the child's attachment point relative to the parent or its bone, in metres. Defaults to zero. */
+        offset?: shared.IVector3;
+        /** Local Euler rotation in radians, matching Entity.rot. Defaults to zero. */
+        rotation?: shared.IVector3;
+        /** Collision between the child and parent. Defaults to false. */
+        collision?: boolean;
+    }
+
     export class Entity extends WorldBase {
         protected constructor();
 
@@ -278,7 +357,6 @@ declare module "revo-server" {
         static readonly count: number;
 
         static getById(id: number): Entity | null;
-        static getByNetworkId(networkId: number): Entity | null;
 
         /** Includes global entities alongside the selected dimension. globalDimension selects only global entities. Omit it to search all worlds. */
         static getInRadius(position: shared.IVector3, radius: number, dimension?: number): readonly Entity[];
@@ -288,9 +366,18 @@ declare module "revo-server" {
         get modelHash(): number;
         set modelHash(model: string | number);
 
-        /** Network ID shared with clients. null after destruction. */
-        readonly networkId: number | null;
         visible: boolean;
+
+        readonly attachedTo: Entity | null;
+        /**
+         * Attaches this entity to a parent in the same dimension. Restored when clients stream in.
+         * Returns false for cycles, hierarchies deeper than 32, occupied/coupled vehicles and peds in a vehicle.
+         * Children follow parent teleports and dimension changes. Setting the child's transform,
+         * velocity or dimension detaches it. Destroying the parent detaches its children.
+         */
+        attachTo(parent: Entity, options?: IEntityAttachmentOptions): boolean;
+        /** Detaches at the last synchronized world transform. Returns true if already detached. */
+        detach(): boolean;
 
         /** Deletes the entity. Throws for players and already destroyed entities. */
         destroy(): void;
@@ -305,7 +392,6 @@ declare module "revo-server" {
         static readonly count: number;
 
         static getById(id: number): Physical | null;
-        static getByNetworkId(networkId: number): Physical | null;
 
         /** Includes global entities alongside the selected dimension. globalDimension selects only global entities. Omit it to search all worlds. */
         static getInRadius(position: shared.IVector3, radius: number, dimension?: number): readonly Physical[];
@@ -332,7 +418,6 @@ declare module "revo-server" {
 
         /** Looks up an NPC. Use Player.getById for players. */
         static getById(id: number): Ped | null;
-        static getByNetworkId(networkId: number): Ped | null;
 
         /** Includes global entities alongside the selected dimension. globalDimension selects only global entities. Omit it to search all worlds. */
         static getInRadius(position: shared.IVector3, radius: number, dimension?: number): readonly Ped[];
@@ -419,7 +504,6 @@ declare module "revo-server" {
         static readonly count: number;
 
         static getById(id: number): Player | null;
-        static getByNetworkId(networkId: number): Player | null;
 
         /** Includes global entities alongside the selected dimension. globalDimension selects only global entities. Omit it to search all worlds. */
         static getInRadius(position: shared.IVector3, radius: number, dimension?: number): readonly Player[];
@@ -501,7 +585,6 @@ declare module "revo-server" {
         static readonly count: number;
 
         static getById(id: number): Vehicle | null;
-        static getByNetworkId(networkId: number): Vehicle | null;
 
         /** Includes global entities alongside the selected dimension. globalDimension selects only global entities. Omit it to search all worlds. */
         static getInRadius(position: shared.IVector3, radius: number, dimension?: number): readonly Vehicle[];
@@ -553,10 +636,10 @@ declare module "revo-server" {
         readonly trailer: Vehicle | null;
 
         /**
-         * Returns the player's ID, or 65535 for an empty seat.
+         * Returns the occupant, or null if the seat is empty. Includes seats reserved during entry.
          * @param seat -1 for the driver.
          */
-        getSeatOccupant(seat: number): number;
+        getSeatOccupant(seat: number): Player | Ped | null;
 
         isLightDamaged(light: number): boolean;
 
@@ -621,7 +704,6 @@ declare module "revo-server" {
         static readonly count: number;
 
         static getById(id: number): Object | null;
-        static getByNetworkId(networkId: number): Object | null;
 
         /** Includes global entities alongside the selected dimension. globalDimension selects only global entities. Omit it to search all worlds. */
         static getInRadius(position: shared.IVector3, radius: number, dimension?: number): readonly Object[];
@@ -683,7 +765,9 @@ declare module "revo-server" {
         engineStateChanged: (vehicle: Vehicle, oldRunning: boolean, newRunning: boolean, source: StateChangeSource) => void;
         entityCreated: (entity: Entity) => void;
         entityRemoved: (entity: Entity) => void;
-        /** Queued after metadata changes. Missing old or new values are undefined. */
+        /** Queued after local metadata changes. Missing values are undefined; object.valid may already be false. */
+        metaChange: (object: Base, key: string, newValue: shared.TransportValue | undefined, oldValue: shared.TransportValue | undefined) => void;
+        /** Queued after metadata changes. Missing values are undefined; object.valid may already be false. */
         syncedMetaChange: (object: Base, key: string, newValue: shared.TransportValue | undefined, oldValue: shared.TransportValue | undefined) => void;
         healthChanged: (entity: Physical, oldHealth: number, newHealth: number, source: StateChangeSource) => void;
         lightDamageChanged: (

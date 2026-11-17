@@ -2546,6 +2546,20 @@ declare module "revo-client" {
     export type WebViewRequestHandler = (...args: unknown[]) => unknown | Promise<unknown>;
 
     export interface IClientEvent {
+        /** Fires once when the first native audio stream is prepared. The source may still be buffering. */
+        audioLoaded: (audio: Audio, sampleRate: number, channels: number) => void;
+        /** Fires for state transitions after creation, for both LocalAudio and server audio.
+         * Arguments describe the queued transition. audio.state may have advanced by delivery.
+         * Audio events are skipped if the audio is destroyed before delivery.
+         */
+        audioStateChanged: (audio: Audio, oldState: AudioState, newState: AudioState) => void;
+        /** Fires after natural playback completion, including effect tails.
+         * Stopping, destruction, streaming out and loop boundaries do not fire this event.
+         */
+        audioEnded: (audio: Audio) => void;
+        /** Fires for asynchronous loading or playback errors. error contains the failure message. */
+        audioFailed: (audio: Audio, error: string) => void;
+
         /** Fires once when a streamed-in entity enters. Boundary points count as inside. */
         entityEnterColshape: (colshape: Colshape, entity: Entity) => void;
 
@@ -2576,13 +2590,20 @@ declare module "revo-client" {
          * Skipped if the victim is destroyed before delivery. Check valid because earlier listeners may destroy either entity.
          */
         entityHit: (victim: Entity, attacker: Entity | null, weaponHash: number, damage: number) => void;
-        /** Fires when an entity is created in or removed from GTA.
-         * Runs synchronously while the entity is registered. After await, check valid again.
+        /** Fires when the GTA instance is ready, after its initial synchronized state is applied.
+         * Local entities fire after native creation. After await, check ready again.
          */
         entityStreamIn: (entity: Entity) => void;
+        /** Fires when a previously announced GTA instance is removed or replaced.
+         * An entity removed before becoming ready does not fire this event.
+         */
         entityStreamOut: (entity: Entity) => void;
         /** On replica removal, ready is false and entity.valid may already be false. */
         networkEntityReadyChanged: (entity: Entity, ready: boolean) => void;
+        /** Fires after local metadata changes. Missing or deleted values are undefined. */
+        metaChange: (object: Base, key: string, newValue: shared.TransportValue | undefined, oldValue: shared.TransportValue | undefined) => void;
+        /** Fires after a networked ped, vehicle or object's ownership is applied and its GTA instance is ready. */
+        netOwnerChanged: (entity: Entity, oldOwner: Player | null, newOwner: Player | null) => void;
         /** Fires for initial metadata and updates. Missing old or new values are undefined. */
         syncedMetaChange: (object: Base, key: string, newValue: shared.TransportValue | undefined, oldValue: shared.TransportValue | undefined) => void;
         disconnected: (reason: number, message: string) => void;
@@ -2592,6 +2613,10 @@ declare module "revo-client" {
         mouseButton: (button: MouseButton, released: boolean, x: number, y: number, modifiers: InputModifier) => void;
         mouseWheel: (delta: number, x: number, y: number, modifiers: InputModifier) => void;
         windowFocus: (focused: boolean) => void;
+        /** Game render dimensions changed, in pixels. Read the initial size with getViewportSize(). */
+        viewportResize: (width: number, height: number) => void;
+        /** Fires when the detected OBS running state changes. Read isObsRunning() for the initial state. */
+        obsRunningChanged: (running: boolean) => void;
         weaponChange: (oldWeapon: number, newWeapon: number) => void;
         weaponFired: (weaponHash: number) => void;
         weaponReloadStarted: (weaponHash: number) => void;
@@ -2630,6 +2655,9 @@ declare module "revo-client" {
         handler: (...args: Args) => shared.TransportValue | void | Promise<shared.TransportValue | void>): void;
     export function showCursor(visible: boolean): void;
     export function isCursorVisible(): boolean;
+
+    /** Last detected OBS Studio running state. Only means if it's open or closed. */
+    export function isObsRunning(): boolean;
 
     /**
      * Keeps the connection loading screen open until this resource calls finishLoadingScreen().
@@ -2702,6 +2730,17 @@ declare module "revo-client" {
         readonly type: shared.BaseType;
         readonly valid: boolean;
 
+        /** Returns a copy of the value, or undefined if the key isn't set. */
+        getMeta<K extends keyof shared.ICustomBaseMeta>(key: K): shared.ICustomBaseMeta[K] | undefined;
+        getMeta<T = shared.TransportValue>(key: string): T | undefined;
+        hasMeta(key: string): boolean;
+        getMetaKeys(): string[];
+        /** Stores a copy for client scripts. Cleared when a new server session starts. */
+        setMeta<K extends string>(key: K, value: K extends keyof shared.ICustomBaseMeta ? shared.ICustomBaseMeta[K] : shared.TransportValue): void;
+        /** Sets several keys at once. If any value is invalid, nothing is changed. */
+        setMeta(values: Partial<shared.ICustomBaseMeta> & Record<string, shared.TransportValue>): void;
+        deleteMeta(key: string): void;
+
         /** Returns a copy. Client-only objects have no synced metadata. */
         getSyncedMeta<K extends keyof shared.ICustomBaseSyncedMeta>(key: K): shared.ICustomBaseSyncedMeta[K] | undefined;
         getSyncedMeta<T = shared.TransportValue>(key: string): T | undefined;
@@ -2768,7 +2807,7 @@ declare module "revo-client" {
 
         static getById(id: number): Entity | null;
         static getByNetworkId(networkId: number): Entity | null;
-        static getByScriptId(scriptID: number): Entity | null;
+        static getByScriptId(scriptId: number): Entity | null;
 
         readonly isNetworked: boolean;
 
@@ -2783,7 +2822,7 @@ declare module "revo-client" {
         readonly netOwner: Player | null;
 
         /** GTA handle, or 0 while not streamed in. Do not retain it across frames. */
-        readonly scriptID: number;
+        readonly scriptId: number;
         get modelHash(): number;
 
         /** Heading in radians. */
@@ -2804,7 +2843,7 @@ declare module "revo-client" {
 
         static getById(id: number): Physical | null;
         static getByNetworkId(networkId: number): Physical | null;
-        static getByScriptId(scriptID: number): Physical | null;
+        static getByScriptId(scriptId: number): Physical | null;
 
         health: number;
         maxHealth: number;
@@ -2828,7 +2867,7 @@ declare module "revo-client" {
 
         static getById(id: number): Ped | null;
         static getByNetworkId(networkId: number): Ped | null;
-        static getByScriptId(scriptID: number): Ped | null;
+        static getByScriptId(scriptId: number): Ped | null;
 
         /** Synchronized seat state. null for a client-only ped. */
         readonly vehicleOccupancy: IVehicleOccupancy | null;
@@ -2861,7 +2900,7 @@ declare module "revo-client" {
         static readonly count: number;
 
         static getById(id: number): LocalPed | null;
-        static getByScriptId(scriptID: number): LocalPed | null;
+        static getByScriptId(scriptId: number): LocalPed | null;
         static getByNetworkId(networkId: number): null;
 
         /** Accepts a model name or nonzero hash of the same entity type.
@@ -2941,7 +2980,7 @@ declare module "revo-client" {
 
         static getById(id: number): Player | null;
         static getByNetworkId(networkId: number): Player | null;
-        static getByScriptId(scriptID: number): Player | null;
+        static getByScriptId(scriptId: number): Player | null;
 
         readonly isSpawned: boolean;
     }
@@ -2955,7 +2994,7 @@ declare module "revo-client" {
 
         static getById(id: number): Vehicle | null;
         static getByNetworkId(networkId: number): Vehicle | null;
-        static getByScriptId(scriptID: number): Vehicle | null;
+        static getByScriptId(scriptId: number): Vehicle | null;
 
         engineRunning: boolean;
 
@@ -3016,7 +3055,7 @@ declare module "revo-client" {
         static readonly count: number;
 
         static getById(id: number): LocalVehicle | null;
-        static getByScriptId(scriptID: number): LocalVehicle | null;
+        static getByScriptId(scriptId: number): LocalVehicle | null;
         static getByNetworkId(networkId: number): null;
 
         /** Accepts a model name or nonzero hash of the same entity type.
@@ -3039,7 +3078,7 @@ declare module "revo-client" {
 
         static getById(id: number): Object | null;
         static getByNetworkId(networkId: number): Object | null;
-        static getByScriptId(scriptID: number): Object | null;
+        static getByScriptId(scriptId: number): Object | null;
 
         readonly dynamic: boolean;
         readonly physicsAsleep: boolean;
@@ -3063,7 +3102,7 @@ declare module "revo-client" {
         static readonly count: number;
 
         static getById(id: number): LocalObject | null;
-        static getByScriptId(scriptID: number): LocalObject | null;
+        static getByScriptId(scriptId: number): LocalObject | null;
         static getByNetworkId(networkId: number): null;
 
         /** Accepts a model name or nonzero hash of the same entity type.
@@ -3214,13 +3253,13 @@ declare module "revo-client" {
         static readonly count: number;
 
         static getById(id: number): Blip | null;
-        static getByScriptId(scriptID: number): Blip | null;
+        static getByScriptId(scriptId: number): Blip | null;
 
         dimension: number;
         readonly blipType: BlipType;
 
         /** 0 until created on an active game frame, and after destruction. */
-        readonly scriptID: number;
+        readonly scriptId: number;
 
         /** GTA palette index, 0..255. */
         color: BlipColor | number;
@@ -3261,7 +3300,7 @@ declare module "revo-client" {
         static readonly all: readonly PointBlip[];
 
         static getById(id: number): PointBlip | null;
-        static getByScriptId(scriptID: number): PointBlip | null;
+        static getByScriptId(scriptId: number): PointBlip | null;
 
         sprite: BlipSprite | number;
         readonly attachedTo: Entity | null;
@@ -3278,7 +3317,7 @@ declare module "revo-client" {
         static readonly all: readonly RadiusBlip[];
 
         static getById(id: number): RadiusBlip | null;
-        static getByScriptId(scriptID: number): RadiusBlip | null;
+        static getByScriptId(scriptId: number): RadiusBlip | null;
 
         readonly radius: number;
     }
@@ -3289,7 +3328,7 @@ declare module "revo-client" {
         static readonly all: readonly AreaBlip[];
 
         static getById(id: number): AreaBlip | null;
-        static getByScriptId(scriptID: number): AreaBlip | null;
+        static getByScriptId(scriptId: number): AreaBlip | null;
 
         readonly size: shared.Vector2;
     }
@@ -3300,7 +3339,9 @@ declare module "revo-client" {
     export class AudioCategory {
         constructor(name: string, parentName?: string);
 
-        /** Whether GTA audio is available. Custom categories can be created before this is true. */
+        /** Whether GTA audio is ready. LocalAudio waits for readiness automatically.
+         * Custom categories can be created before this is true.
+         */
         static readonly available: boolean;
         static getByName(name: string): AudioCategory | null;
 
@@ -3308,7 +3349,7 @@ declare module "revo-client" {
         readonly valid: boolean;
         readonly parent: string | null;
 
-        /** Shared attenuation, -100..0 dB. Parent shared settings also apply. */
+        /** Shared gain in dB, -100..100. -100 mutes. Parent shared settings also apply. */
         volume: number;
         muted: boolean;
         /** Effects run in order for each playback. Assign a new array to update them, or [] to clear.
@@ -3353,16 +3394,10 @@ declare module "revo-client" {
     export interface IAudioMixSettings {
         /** 0 preserves stereo frontend playback. 1 uses positional mono. Values in between blend both. */
         spatialBlend: number;
-        /** Additional attenuation on this client, -100..0 dB. */
+        /** Additional gain on this client, -100..100 dB. -100 mutes. */
         volumeDb: number;
         /** 100..20000 Hz. 20000 bypasses filtering. */
         lowPassCutoffHz: number;
-    }
-
-    export enum AudioSourceType {
-        Resource = 0,
-        Url = 1,
-        LiveUrl = 2,
     }
 
     export enum AudioState {
@@ -3376,24 +3411,18 @@ declare module "revo-client" {
         Failed = 7,
     }
 
-    export interface IAudioSource {
-        readonly type: AudioSourceType;
-
-        /** Resource paths are relative to this server's client content root. URLs use HTTP(S).
-         * Absolute paths and parent-directory traversal are rejected.
-         */
-        readonly path: string;
-    }
-
     export interface ILocalAudioOptions {
+        /** Treat an HTTP(S) source as a live broadcast. Defaults to false. Resource audio cannot be live. */
+        readonly live?: boolean;
+
         /** A position creates spatial audio. Omit it for frontend playback. */
         readonly pos?: shared.IVector3;
 
-        /** Gain in dB, -100..12. Defaults to 0. */
+        /** Gain in dB, -100..100. -100 mutes. Defaults to 0. */
         readonly volume?: number;
         readonly loop?: boolean;
 
-        /** Name of an existing AudioCategory. */
+        /** GTA or custom category name. GTA category lookup waits for the audio engine when needed. */
         readonly category?: string;
         readonly effects?: readonly shared.AudioEffect[];
 
@@ -3419,6 +3448,7 @@ declare module "revo-client" {
 
         readonly isSpatial: boolean;
         readonly attachedEntity: Entity | null;
+        readonly live: boolean;
         readonly category: string | null;
         readonly mix: Readonly<IAudioMixSettings>;
         readonly state: AudioState;
@@ -3444,12 +3474,15 @@ declare module "revo-client" {
         stop(): void;
     }
 
-    /** Loads and plays a resource file or HTTP(S) URL asynchronously. Requires AudioCategory.available.
+    /** Loads and plays a resource file or HTTP(S) URL asynchronously. Waits in Loading while GTA audio initializes.
      * Destroyed when this resource stops. Live URLs cannot loop.
      * Spatial files pause outside streaming range. URLs reconnect on return.
      */
     export class LocalAudio extends Audio {
-        constructor(source: IAudioSource, options?: ILocalAudioOptions);
+        /** resources://audio/file.mp3 addresses the client content root. HTTP(S) URLs load remotely.
+         * Resource paths support percent encoding. Absolute paths and parent-directory traversal are rejected.
+         */
+        constructor(source: string, options?: ILocalAudioOptions);
 
         /** Audio created by this resource. */
         static readonly all: readonly LocalAudio[];
@@ -3459,7 +3492,7 @@ declare module "revo-client" {
 
         dimension: number;
 
-        /** Gain in dB, -100..12. Changes apply while playback is active. */
+        /** Gain in dB, -100..100. -100 mutes. Changes apply while playback is active. */
         volume: number;
         loop: boolean;
         effects: readonly shared.AudioEffect[];
@@ -3468,8 +3501,23 @@ declare module "revo-client" {
         destroy(): void;
     }
 
+    /** Current game render dimensions in pixels. Returns (0, 0) before the first valid viewport is available. */
+    export function getViewportSize(): shared.Vector2;
+
+    export interface IWebViewSize {
+        width: number;
+        height: number;
+        /** Defaults to pixels. Viewport dimensions are fractions from 0 to 1 and follow resolution changes. */
+        units?: 'pixels' | 'viewport';
+    }
+
     export class WebView {
+        /** Fills the game viewport and follows resolution changes. */
+        constructor(url: string);
+        /** Use resources://ui/index.html for ui/index.html in the client resource bundle. */
         constructor(url: string, width: number, height: number);
+        /** Pixel dimensions must be positive integers. A zero viewport dimension hides the surface and disables its input. */
+        constructor(url: string, size: IWebViewSize);
 
         static readonly all: readonly WebView[];
         static readonly count: number;
@@ -3484,11 +3532,20 @@ declare module "revo-client" {
         url: string;
         visible: boolean;
 
+        /** Follows the game viewport at (0, 0). Disabling keeps the current position and size. */
+        fullscreen: boolean;
+
+        /** Position in pixels. Changing it preserves the sizing rule. */
         get pos(): shared.Vector2;
         set pos(value: shared.IVector2);
 
+        /** Resolved dimensions in pixels. */
         get size(): shared.Vector2;
+        /** Switches to a fixed pixel size. */
         set size(value: shared.IVector2);
+
+        /** Changes the sizing rule. Positive viewport fractions round to the nearest pixel, with a minimum of one pixel. */
+        setSize(size: IWebViewSize): void;
 
         zIndex: number;
 

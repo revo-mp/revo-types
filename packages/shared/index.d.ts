@@ -27,6 +27,31 @@ declare module "revo-shared" {
         Blip = 8,
     }
 
+    /** Hit collision components for standard human peds. Custom models and animals may use different indices. */
+    export enum PedBodyPart {
+        Pelvis = 0,
+        LeftHip = 1,
+        LeftLeg = 2,
+        LeftFoot = 3,
+        RightHip = 4,
+        RightLeg = 5,
+        RightFoot = 6,
+        LowerTorso = 7,
+        UpperTorso = 8,
+        Chest = 9,
+        UnderNeck = 10,
+        LeftShoulder = 11,
+        LeftUpperArm = 12,
+        LeftElbow = 13,
+        LeftWrist = 14,
+        RightShoulder = 15,
+        RightUpperArm = 16,
+        RightElbow = 17,
+        RightWrist = 18,
+        Neck = 19,
+        Head = 20,
+    }
+
     /** Clothing slots. Torso controls the arms and upper body on freemode peds. */
     export enum PedComponent {
         Head = 0,
@@ -941,6 +966,9 @@ declare module "revo-shared" {
 
     /** Augment this interface to type Base metadata keys on the client and server. */
     export interface ICustomBaseSyncedMeta {}
+
+    /** Extend this interface with your metadata keys and their types. */
+    export interface ICustomBaseMeta {}
 
     export type TickHandler = () => void;
 
